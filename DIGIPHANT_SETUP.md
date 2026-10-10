@@ -75,6 +75,6 @@ python -m venv .\DigiPhantStarter\Tracking\.venv
 & .\DigiPhantStarter\Tracking\.venv\Scripts\python.exe -m unittest discover -s .\DigiPhantStarter\Tracking -v
 ```
 
-若 PowerShell 找不到 `pwsh`，上面的 Windows PowerShell 命令仍可用。restore script 只在 `Assets/Elephant` 不存在時複製 Elephant/metadata，並套用 patch；不要重複套用已存在的 patch。SavannahCourse 與 `.meta` 必須從保存來源複製並保留所有 metadata；不要覆蓋 repo 已追蹤的 `Assets/DigiPhant`、`Assets/StudentWork` 或 Savannah adaptations。`Library/`、`Temp/`、`Logs/`、`.venv/`、錄影由工具重建。
+restore script 只在 `Assets/Elephant` 與其 metadata 不存在時還原它們，並套用 patch；不要重複套用已存在的 patch。SavannahCourse 與全部 `.meta` 已納入學生 repository，fresh checkout 不需要再次複製；不要覆蓋已追蹤的 `Assets/DigiPhant`、`Assets/StudentWork` 或 Savannah adaptations。`Library/`、`Temp/`、`Logs/`、`.venv/` 與錄影不納入 Git；Python 環境需依上述命令重建，錄影需另行保存到 Drive。
 
 Windows UDP 行為參考 [Microsoft Winsock recvfrom](https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom)，camera backend/index 參考 [OpenCV Video I/O flags](https://docs.opencv.org/4.x/d4/d15/group__videoio__flags__base.html)。
