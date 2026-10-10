@@ -1,8 +1,16 @@
 diff --git a/Tracking/bridge.py b/Tracking/bridge.py
-index f55589c..15d4a87 100644
+index f55589c..bd03717 100644
 --- a/Tracking/bridge.py
 +++ b/Tracking/bridge.py
-@@ -118,6 +118,18 @@ def encode_preview(frame, cv2):
+@@ -6,6 +6,7 @@ import json
+ import math
+ from pathlib import Path
+ import socket
++import sys
+ import time
+ 
+ FEATURES = ('LeftHandHeight', 'RightHandHeight', 'LeftFootLift', 'RightFootLift', 'Lean', 'ArmSpread')
+@@ -118,6 +119,18 @@ def encode_preview(frame, cv2):
      return None
  
  
@@ -21,7 +29,18 @@ index f55589c..15d4a87 100644
  def main():
      parser = argparse.ArgumentParser(description=__doc__)
      parser.add_argument('--people', type=int, choices=(1, 2, 3, 4), default=3)
-@@ -173,11 +185,7 @@ def main():
+@@ -150,7 +163,9 @@ def main():
+         min_pose_detection_confidence=.5, min_pose_presence_confidence=.5,
+         min_tracking_confidence=.5)
+     tracker = PerformerTracker(args.people)
+-    camera = cv2.VideoCapture(args.camera)
++    # DirectShow is reliable for this Windows integrated camera; CAP_ANY stays
++    # the portable default on other operating systems.
++    camera = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW if sys.platform == 'win32' else cv2.CAP_ANY)
+     if not camera.isOpened():
+         raise SystemExit('Camera could not open. Check permissions or try --camera 1.')
+     sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+@@ -173,11 +188,7 @@ def main():
      try:
          with vision.PoseLandmarker.create_from_options(options) as detector:
              while True:
