@@ -1,0 +1,27 @@
+# Unity generated folders
+/Library/
+/Temp/
+/Obj/
+/Logs/
+/UserSettings/
+/Build/
+/Builds/
+
+# Local tracking runtime and recordings. Upload checked MP4s to the team Drive.
+**/.venv/
+**/__pycache__/
+/Recordings/
+/recordings/
+
+# Instructor starter clone and large shared elephant assets are restored from
+# the recorded starter commit in DIGIPHANT_SETUP.md.
+/DigiPhantStarter/
+/Assets/Elephant/
+/Assets/Elephant.meta
+
+# IDE files
+/.vs/
+/.vscode/
+*.csproj
+*.sln
+*.slnx

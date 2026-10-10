@@ -1,0 +1,61 @@
+diff --git a/Tracking/bridge.py b/Tracking/bridge.py
+index f55589c..15d4a87 100644
+--- a/Tracking/bridge.py
++++ b/Tracking/bridge.py
+@@ -118,6 +118,18 @@ def encode_preview(frame, cv2):
+     return None
+ 
+ 
++def receive_datagrams(sender, limit=32):
++    """Read local UDP commands without treating Windows ICMP resets as fatal."""
++    for _ in range(limit):
++        try:
++            yield sender.recvfrom(1024)
++        except BlockingIOError:
++            return
++        except ConnectionResetError:
++            # Unity can bind its base port after the preview starts.
++            continue
++
++
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument('--people', type=int, choices=(1, 2, 3, 4), default=3)
+@@ -173,11 +185,7 @@ def main():
+     try:
+         with vision.PoseLandmarker.create_from_options(options) as detector:
+             while True:
+-                for _ in range(32):
+-                    try:
+-                        data, address = sender.recvfrom(1024)
+-                    except BlockingIOError:
+-                        break
++                for data, address in receive_datagrams(sender):
+                     if address == ('127.0.0.1', args.port):
+                         try:
+                             command = json.loads(data)
+diff --git a/Tracking/test_bridge.py b/Tracking/test_bridge.py
+index afc8566..3ab37ee 100644
+--- a/Tracking/test_bridge.py
++++ b/Tracking/test_bridge.py
+@@ -1,9 +1,19 @@
+ import unittest
+ from types import SimpleNamespace
+-from bridge import PerformerTracker, extract_features, requested_count
++from bridge import PerformerTracker, extract_features, receive_datagrams, requested_count
+ 
+ 
+ class TrackingTests(unittest.TestCase):
++    def test_windows_udp_reset_does_not_discard_the_next_command(self):
++        class DatagramSocket:
++            def __init__(self):
++                self.items = [ConnectionResetError(), (b'{"version":1}', ('127.0.0.1', 5055)), BlockingIOError()]
++            def recvfrom(self, size):
++                item = self.items.pop(0)
++                if isinstance(item, BaseException): raise item
++                return item
++        self.assertEqual(list(receive_datagrams(DatagramSocket())), [(b'{"version":1}', ('127.0.0.1', 5055))])
++
+     def test_roles_survive_detection_reordering_and_dropout(self):
+         t = PerformerTracker(3)
+         self.assertEqual(t.assign([(.8, .5), (.2, .5)]), {})
