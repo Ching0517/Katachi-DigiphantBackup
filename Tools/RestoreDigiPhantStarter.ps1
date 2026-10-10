@@ -22,6 +22,11 @@ $head = (& git -C $starter rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the starter commit.' }
 if ($head -ne $ExpectedStarterCommit)
 { throw "Starter commit must be $ExpectedStarterCommit." }
+& git -C $starter diff --quiet HEAD -- Elephant Elephant.meta Tracking/bridge.py Tracking/test_bridge.py
+if ($LASTEXITCODE -ne 0) { throw 'Starter shared assets or tracking sources have local changes.' }
+$untracked = & git -C $starter status --porcelain -- Elephant Elephant.meta Tracking/bridge.py Tracking/test_bridge.py
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect starter working-tree status.' }
+if ($untracked) { throw 'Starter contains uncommitted or untracked required source paths.' }
 
 if (Test-Path (Join-Path $assets 'Elephant')) {
     throw 'Assets/Elephant already exists. Refusing to overwrite shared assets.'
