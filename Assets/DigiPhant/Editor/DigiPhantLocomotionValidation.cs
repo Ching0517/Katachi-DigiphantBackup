@@ -75,6 +75,34 @@ namespace DigiPhant.Editor
             head.locomotionWeight = 0;
             c.ApplyControls(10, 0);
             Check(Quaternion.Angle(baseHead, head.bones[0].localRotation) < .1f, "Zero overlay weight failed");
+
+            // Gesture fields are optional v1 packet data: failures neutralize only the
+            // gesture channel and must not make an otherwise valid pose packet fail.
+            loco.drink = AssetDatabase.LoadAllAssetsAtPath("Assets/Elephant/Animations/elephant@drink.fbx")
+                .OfType<AnimationClip>().First(x => !x.name.StartsWith("__"));
+            loco.gestureBlendSeconds = .05f;
+            PoseFrame GestureFrame(string gesture, float score) => new PoseFrame { version = 1,
+                performerCount = c.performerCount, upperBodyOnly = c.upperBodyOnly, gesture = gesture,
+                gestureScore = score, people = Array.Empty<PerformerFrame>() };
+            c.inputMode = InputMode.Camera;
+            Check(c.AcceptPacket(JsonUtility.ToJson(GestureFrame("Thumb_Up", .9f)), 20), "Thumb-up pose packet rejected");
+            c.ApplyControls(20, .2f);
+            Check(loco.GestureValueFor("Head turn") < -.5f, "Thumb-up did not select head-left value");
+            Check(c.AcceptPacket(JsonUtility.ToJson(GestureFrame("Closed_Fist", .9f)), 21), "Fist pose packet rejected");
+            c.ApplyControls(21, .2f);
+            Check(loco.GestureValueFor("Trunk curl") > .5f, "Closed fist did not select trunk curl");
+            Check(c.AcceptPacket(JsonUtility.ToJson(GestureFrame("Victory", .9f)), 22), "Victory pose packet rejected");
+            c.ApplyControls(22, .1f);
+            Check(loco.IsDrinkActive && loco.CurrentAction == "Drink water", "Victory did not start the drink one-shot");
+            Check(c.AcceptPacket(JsonUtility.ToJson(GestureFrame("Unknown", .9f)), 23), "Unknown gesture rejected valid pose");
+            Check(c.CurrentGesture == "None", "Unknown gesture did not neutralize");
+            Check(c.AcceptPacket(JsonUtility.ToJson(GestureFrame("Thumb_Down", 1.1f)), 24), "Invalid score rejected valid pose");
+            Check(c.CurrentGesture == "None", "Invalid score did not neutralize");
+            Check(c.AcceptPacket(JsonUtility.ToJson(new PoseFrame { version = 1, performerCount = c.performerCount,
+                upperBodyOnly = c.upperBodyOnly, people = Array.Empty<PerformerFrame>() }), 25), "Old pose-only packet rejected");
+            c.ApplyControls(26, .2f);
+            Check(loco.GestureValueFor("Head turn") > -.1f && loco.GestureValueFor("Trunk curl") < .1f,
+                "Missing or stale gesture did not return joints to neutral");
             loco.ResetPosition();
             loco.stageRadius = .2f;
             loco.testForward = 1;

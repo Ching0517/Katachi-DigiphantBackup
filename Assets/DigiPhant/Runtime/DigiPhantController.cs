@@ -22,6 +22,9 @@ namespace DigiPhant
         public int performerCount;
         public bool upperBodyOnly;
         public PerformerFrame[] people;
+        // Optional in protocol version 1, preserving compatibility with older bridges.
+        public string gesture;
+        public float gestureScore;
     }
     [Serializable] public class BoneControl
     {
@@ -51,17 +54,26 @@ namespace DigiPhant
         public int port = 5055;
         [Range(0, 1)] public float minimumConfidence = .5f;
         [Min(.1f)] public float trackingTimeout = .5f;
+        [Header("Gesture actions")]
+        public bool enableGestureActions = true;
+        [Range(0, 1)] public float gestureMinimumConfidence = .5f;
+        [Min(.1f)] public float gestureTimeout = .5f;
         public bool showControls = true;
         public bool showCameraPreview = true;
+        [Range(180, 700)] [Tooltip("Width of the camera preview in the in-game controls. This is also used when the controls panel is hidden.")]
+        public float cameraPreviewWidth = 330;
         public string Status { get; private set; } = "Test sliders ready";
         public int ReceivedFrames { get; private set; }
         public bool IsCalibrated { get; private set; }
+        public string CurrentGesture { get; private set; } = "None";
         float calibrationDeadline = -1;
         public bool CalibrationPending => calibrationDeadline >= 0;
         readonly float[,] values = new float[4, 6];
         readonly float[,] confidence = new float[4, 6];
         readonly float[,] neutral = new float[4, 6];
         readonly float[] lastSeen = { -1000, -1000, -1000, -1000 };
+        float lastGestureSeen = -1000;
+        bool hasGestureSnapshot;
         readonly Dictionary<Transform, Quaternion> rest = new Dictionary<Transform, Quaternion>();
         UdpClient socket;
         Vector2 scroll;
@@ -70,6 +82,12 @@ namespace DigiPhant
         int previousCount;
         InputMode previousMode;
         bool previousUpperBodyOnly;
+
+        float ControlsPanelWidth()
+        {
+            float maxPanelWidth = Mathf.Min(720, Mathf.Max(200, Screen.width * .6f));
+            return Mathf.Min(cameraPreviewWidth + 20, maxPanelWidth);
+        }
 
         void OnEnable()
         {
@@ -153,6 +171,15 @@ namespace DigiPhant
             Array.Clear(confidence, 0, confidence.Length);
             Array.Clear(neutral, 0, neutral.Length);
             for (int i = 0; i < 4; i++) lastSeen[i] = -1000;
+            GetComponent<DigiPhantLocomotion>()?.ClearGestureActions();
+            ClearGesture();
+        }
+        void ClearGesture()
+        {
+            CurrentGesture = "None";
+            hasGestureSnapshot = false;
+            lastGestureSeen = -1000;
+            GetComponent<DigiPhantLocomotion>()?.SetGesture(null, false);
         }
         public bool AcceptPacket(string json, float now)
         {
@@ -189,7 +216,24 @@ namespace DigiPhant
                 { values[i, k] = Mathf.Clamp(p.values[k], -3, 3); confidence[i, k] = p.confidence[k]; }
             }
             ReceivedFrames++;
+            AcceptGesture(frame, now);
             return true;
+        }
+        static bool IsSupportedGesture(string value)
+        {
+            return value == "None" || value == "Open_Palm" || value == "Thumb_Up" ||
+                value == "Thumb_Down" || value == "Closed_Fist" || value == "Victory";
+        }
+        void AcceptGesture(PoseFrame frame, float now)
+        {
+            // Gesture data is optional. Its failure must never discard valid pose data.
+            if (string.IsNullOrEmpty(frame.gesture) || !IsSupportedGesture(frame.gesture) ||
+                !Finite(frame.gestureScore) || frame.gestureScore < 0 || frame.gestureScore > 1)
+            { ClearGesture(); return; }
+            hasGestureSnapshot = true;
+            lastGestureSeen = now;
+            CurrentGesture = frame.gesture == "None" || frame.gesture == "Open_Palm" ||
+                frame.gestureScore < gestureMinimumConfidence ? "None" : frame.gesture;
         }
         static bool Finite(float v) => !float.IsNaN(v) && !float.IsInfinity(v);
         public void PollCamera(float now)
@@ -244,6 +288,7 @@ namespace DigiPhant
             calibrationDeadline = -1;
             IsCalibrated = false;
             GetComponent<DigiPhantLocomotion>()?.StopMotion();
+            GetComponent<DigiPhantLocomotion>()?.ClearGestureActions();
         }
         public bool IsMovementVisible(int performer, Movement movement, float now)
         {
@@ -306,6 +351,8 @@ namespace DigiPhant
         {
             foreach (var pair in rest) if (pair.Key != null) pair.Key.localRotation = pair.Value;
             var locomotion = GetComponent<DigiPhantLocomotion>();
+            bool gestureFresh = enableGestureActions && hasGestureSnapshot && now - lastGestureSeen <= gestureTimeout;
+            if (locomotion != null) locomotion.SetGesture(gestureFresh ? CurrentGesture : null, gestureFresh);
             bool animated = locomotion != null && locomotion.isActiveAndEnabled && locomotion.Evaluate(now, dt);
             foreach (var c in controls)
             {
@@ -318,11 +365,14 @@ namespace DigiPhant
                         target = values[i, k] - neutral[i, k];
                 }
                 target = Mathf.Clamp(target * c.sensitivity, -1, 1);
+                if (locomotion != null && locomotion.ShouldGestureOwn(c.label)) target = 0;
                 c.current = c.smoothing <= 0 ? target : Mathf.Lerp(c.current, target, 1 - Mathf.Exp(-c.smoothing * dt));
                 if (c.bones == null || c.localAxis.sqrMagnitude < .0001f) continue;
+                float gestureValue = locomotion != null ? locomotion.GestureValueFor(c.label) : 0;
+                float overlayWeight = locomotion != null ? locomotion.BoneOverlayWeight : 1;
                 foreach (var bone in c.bones)
                     if (bone != null && rest.ContainsKey(bone))
-                        bone.localRotation *= Quaternion.AngleAxis(c.current * c.degrees * (animated ? c.locomotionWeight : 1), c.localAxis.normalized);
+                        bone.localRotation *= Quaternion.AngleAxis((c.current * (animated ? c.locomotionWeight : 1) + gestureValue) * overlayWeight * c.degrees, c.localAxis.normalized);
             }
         }
         void LateUpdate()
@@ -336,7 +386,7 @@ namespace DigiPhant
             var stageCamera = Camera.main;
             if (stageCamera != null)
             {
-                float left = showControls ? (Mathf.Min(350, Screen.width * .32f) + 20) / Mathf.Max(1, Screen.width) : 0;
+                float left = showControls ? Mathf.Clamp((ControlsPanelWidth() + 20) / Mathf.Max(1, Screen.width), 0, .75f) : 0;
                 stageCamera.rect = new Rect(left, 0, 1 - left, 1);
             }
         }
@@ -344,12 +394,23 @@ namespace DigiPhant
         void OnGUI()
         {
             if (!showControls) return;
-            float width = Mathf.Min(350, Screen.width * .32f);
+            // Leave enough room for the stage camera while allowing a useful large preview.
+            float width = ControlsPanelWidth();
             GUI.DrawTexture(new Rect(0, 0, width + 20, Screen.height), Texture2D.blackTexture, ScaleMode.StretchToFill, false);
             var labelStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
             void Label(string text) => GUILayout.Label(text, labelStyle, GUILayout.Width(width - 32));
             GUILayout.BeginArea(new Rect(10, 10, width, Screen.height - 20), GUI.skin.box);
-            GetComponent<DigiPhantCameraPreview>()?.DrawInline(width - 20);
+            var preview = GetComponent<DigiPhantCameraPreview>();
+            if (preview != null && preview.showPreview)
+            {
+                GUILayout.Label("Preview size: " + Mathf.RoundToInt(cameraPreviewWidth));
+                float newPreviewWidth = GUILayout.HorizontalSlider(cameraPreviewWidth, 180, 700);
+                if (!Mathf.Approximately(newPreviewWidth, cameraPreviewWidth))
+                {
+                    cameraPreviewWidth = newPreviewWidth;
+                }
+                preview.DrawInline(width - 20);
+            }
             GetComponent<DigiPhantRecording>()?.DrawControls(width - 32);
             scroll = GUILayout.BeginScrollView(scroll);
             Label("DIGIPHANT | collective digital twin");
@@ -361,8 +422,12 @@ namespace DigiPhant
             if (upperBodyOnly) Label("Keep shoulders and hands visible. Raise hands for legs; tilt shoulders for steering, head and tail. Solo: left hand also drives travel; right hand curls trunk.");
             int mode = GUILayout.Toolbar((int)inputMode, new[] { "Test sliders", "Camera" });
             if (mode != (int)inputMode) SetInputMode((InputMode)mode);
+            bool gestures = GUILayout.Toggle(enableGestureActions, "Enable hand gesture actions");
+            if (gestures != enableGestureActions) { enableGestureActions = gestures; GetComponent<DigiPhantLocomotion>()?.ClearGestureActions(); ClearGesture(); }
             Label(Status);
-            GetComponent<DigiPhantLocomotion>()?.DrawControls(width - 32);
+            var locomotion = GetComponent<DigiPhantLocomotion>();
+            if (locomotion != null && !string.IsNullOrEmpty(locomotion.GestureStatus)) Label(locomotion.GestureStatus);
+            locomotion?.DrawControls(width - 32);
             if (inputMode == InputMode.Camera)
             {
                 for (int i = 1; i <= performerCount; i++)

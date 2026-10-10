@@ -42,6 +42,7 @@ namespace DigiPhant.Editor
             locomotion.walkRight = Clip("walkright");
             locomotion.runLeft = Clip("runleft");
             locomotion.runRight = Clip("runright");
+            locomotion.drink = Clip("drink", false);
             foreach (var c in controls.controls) c.locomotionWeight = c.label.Contains("leg") ? .35f : 1;
             var stage = GameObject.Find("Stage");
             if (stage)

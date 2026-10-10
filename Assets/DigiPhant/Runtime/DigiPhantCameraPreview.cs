@@ -55,7 +55,7 @@ namespace DigiPhant
             if (texture == null) texture = new Texture2D(2, 2, TextureFormat.RGB24, false);
             if (!ImageConversion.LoadImage(texture, bytes, false)) return false;
             lastFrame = now;
-            Status = "Live camera · unmirrored";
+            Status = "Live camera";
             return true;
         }
         public void PollPreview(float now)
@@ -105,7 +105,8 @@ namespace DigiPhant
                 // WorkingDirectory makes all arguments fixed filenames or validated integers.
                 var info = new ProcessStartInfo(executable,
                     "-u bridge.py --no-window --people " + controller.performerCount +
-                    " --camera " + Mathf.Clamp(cameraIndex, 0, 8) + " --port " + controller.port)
+                    " --camera " + Mathf.Clamp(cameraIndex, 0, 8) + " --port " + controller.port +
+                    " --mirror-preview")
                 {
                     WorkingDirectory = folder, UseShellExecute = false, CreateNoWindow = true,
                     RedirectStandardOutput = true, RedirectStandardError = true
@@ -159,7 +160,8 @@ namespace DigiPhant
         {
             if (!showPreview) return;
             GUILayout.Label("CAMERA PREVIEW");
-            float height = Mathf.Min(width * .75f, Screen.height * .25f);
+            // Keep the 4:3 camera image useful at larger sizes; the controls below remain scrollable.
+            float height = Mathf.Min(width * .75f, Mathf.Max(135, Screen.height * .45f));
             Rect picture = GUILayoutUtility.GetRect(width, height, GUILayout.ExpandWidth(true));
             GUI.DrawTexture(picture, Texture2D.blackTexture, ScaleMode.StretchToFill, false);
             if (HasLiveFrame) GUI.DrawTexture(picture, texture, ScaleMode.ScaleToFit);
@@ -171,7 +173,9 @@ namespace DigiPhant
         void OnGUI()
         {
             if (!showPreview || (controller != null && controller.showControls)) return;
-            float width = Mathf.Clamp(Screen.width * .27f, 180, 350);
+            if (controller == null) controller = GetComponent<DigiPhantController>();
+            float requestedWidth = controller != null ? controller.cameraPreviewWidth : 350;
+            float width = Mathf.Clamp(requestedWidth, 180, Mathf.Max(180, Mathf.Min(700, Screen.width - 24)));
             float height = width * .75f;
             var box = new Rect(Screen.width - width - 12, 12, width, height + 85);
             GUI.Box(box, GUIContent.none);
@@ -179,6 +183,7 @@ namespace DigiPhant
             var picture = new Rect(box.x + 8, box.y + 30, width - 16, height - 12);
             GUI.DrawTexture(picture, Texture2D.blackTexture, ScaleMode.StretchToFill, false);
             if (HasLiveFrame) GUI.DrawTexture(picture, texture, ScaleMode.ScaleToFit);
+
             var labelStyle = new GUIStyle(GUI.skin.label) { wordWrap = true, fontSize = 11 };
             GUI.Label(new Rect(box.x + 8, box.y + height + 22, width - 75, 55), Status, labelStyle);
             if (GUI.Button(new Rect(box.xMax - 62, box.y + height + 30, 54, 26), "Retry")) BeginPreview();

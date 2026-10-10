@@ -47,6 +47,14 @@ namespace DigiPhant
         public Camera followCamera;
         public bool followElephant = true;
         public AnimationClip idle, walk, run, backward, turnLeft, turnRight, walkLeft, walkRight, runLeft, runRight;
+        [Header("Gesture actions")]
+        public bool enableGestureActions = true;
+        [Tooltip("The one-shot vendor clip played by a Victory gesture.")]
+        public AnimationClip drink;
+        [Range(.05f, 1)] public float gestureBlendSeconds = .2f;
+        [Range(-1, 1)] public float thumbUpHeadValue = -1;
+        [Range(-1, 1)] public float thumbDownHeadValue = 1;
+        [Range(-1, 1)] public float closedFistTrunkValue = 1;
         public MovementDriver forward = new MovementDriver { sources = new[] { new MovementSource { movement = Movement.LeftHandHeight } } };
         public MovementDriver steering = new MovementDriver { sources = new[] { new MovementSource { movement = Movement.Lean } } };
         [Min(.01f)] public float walkSpeed = 1.8f;
@@ -61,13 +69,22 @@ namespace DigiPhant
         [Range(-1, 1)] public float testForward;
         [Range(-1, 1)] public float testSteering;
         public string CurrentAction { get; private set; } = "Idle";
+        public string GestureStatus { get; private set; }
         public float CurrentSpeed { get; private set; }
         public bool AnimationActive => graph.IsValid();
+        public bool IsDrinkActive => enableLocomotion && (drinkWeight > .001f || drinkRequested);
+        public float DrinkWeight => Mathf.Clamp01(drinkWeight);
+        public float BoneOverlayWeight => 1 - DrinkWeight;
+        public float AnimationWeightSum { get; private set; }
+        bool GestureActionsActive => enableGestureActions && controller != null &&
+            controller.enableGestureActions && controller.inputMode == InputMode.Camera;
         DigiPhantController controller;
         PlayableGraph graph;
         AnimationMixerPlayable mixer;
         AnimationClipPlayable[] playables;
         AnimationClip[] clips;
+        AnimationClip graphDrink;
+        float[] gaitWeights;
         readonly string[] actions = { "Idle", "Walk", "Run", "Backward", "Turn left", "Turn right", "Walk left", "Walk right", "Run left", "Run right" };
         readonly Dictionary<Transform, Pose> restPose = new Dictionary<Transform, Pose>();
         Vector3 startPosition, cameraOffset, cameraStart, motionPosition;
@@ -77,8 +94,47 @@ namespace DigiPhant
         AnimatorCullingMode previousCulling;
         RuntimeAnimatorController previousController;
         float throttle, turn, cycle;
+        string activeGesture = "None";
+        float headGestureValue, trunkGestureValue, drinkWeight, drinkTime;
+        bool drinkRequested, victoryLatched;
 
         void OnEnable() { controller = GetComponent<DigiPhantController>(); }
+        public void SetGesture(string gesture, bool freshSnapshot)
+        {
+            if (!GestureActionsActive || !freshSnapshot)
+            {
+                activeGesture = "None";
+                drinkRequested = false;
+                return;
+            }
+            activeGesture = gesture ?? "None";
+            if (activeGesture != "Victory") victoryLatched = false;
+            if (activeGesture == "Victory" && !victoryLatched)
+            {
+                victoryLatched = true;
+                if (!enableLocomotion) GestureStatus = "Locomotion is disabled; drink action is unavailable.";
+                else if (drink != null) { drinkRequested = true; drinkTime = 0; GestureStatus = null; }
+                else GestureStatus = "Drink clip is not assigned; continuing locomotion.";
+            }
+            if (activeGesture != "Victory") drinkRequested = false;
+        }
+        public void ClearGestureActions()
+        {
+            activeGesture = "None";
+            headGestureValue = trunkGestureValue = 0;
+            drinkWeight = drinkTime = 0;
+            drinkRequested = victoryLatched = false;
+            GestureStatus = null;
+        }
+        public bool ShouldGestureOwn(string controlLabel)
+        {
+            return GestureActionsActive && (controlLabel == "Head turn" || controlLabel == "Trunk curl");
+        }
+        public float GestureValueFor(string controlLabel)
+        {
+            if (!GestureActionsActive) return 0;
+            return controlLabel == "Head turn" ? headGestureValue : controlLabel == "Trunk curl" ? trunkGestureValue : 0;
+        }
         public bool Initialise()
         {
             if (initialised) return true;
@@ -111,15 +167,26 @@ namespace DigiPhant
             graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
             clips = new[] { idle, walk, run, backward, turnLeft, turnRight, walkLeft ? walkLeft : walk,
                 walkRight ? walkRight : walk, runLeft ? runLeft : run, runRight ? runRight : run };
-            mixer = AnimationMixerPlayable.Create(graph, clips.Length);
-            playables = new AnimationClipPlayable[clips.Length];
+            mixer = AnimationMixerPlayable.Create(graph, clips.Length + (drink ? 1 : 0));
+            playables = new AnimationClipPlayable[mixer.GetInputCount()];
+            gaitWeights = new float[clips.Length];
             for (int i = 0; i < clips.Length; i++)
             {
                 playables[i] = AnimationClipPlayable.Create(graph, clips[i]);
                 playables[i].SetApplyFootIK(false);
                 graph.Connect(playables[i], 0, mixer, i);
                 mixer.SetInputWeight(i, i == 0 ? 1 : 0);
+                gaitWeights[i] = i == 0 ? 1 : 0;
             }
+            if (drink)
+            {
+                int drinkIndex = clips.Length;
+                playables[drinkIndex] = AnimationClipPlayable.Create(graph, drink);
+                playables[drinkIndex].SetApplyFootIK(false);
+                graph.Connect(playables[drinkIndex], 0, mixer, drinkIndex);
+                mixer.SetInputWeight(drinkIndex, 0);
+            }
+            graphDrink = drink;
             var output = AnimationPlayableOutput.Create(graph, "Elephant gait", elephantAnimator);
             output.SetSourcePlayable(mixer);
             graph.Play();
@@ -149,9 +216,45 @@ namespace DigiPhant
         }
         public bool Evaluate(float now, float dt)
         {
-            if (!enableLocomotion) { StopAnimation(); return false; }
-            if (!StartAnimation()) return false;
             dt = Mathf.Clamp(dt, 0, .1f);
+            float gestureBlend = 1 - Mathf.Exp(-dt / Mathf.Max(.01f, gestureBlendSeconds));
+            float desiredHead = activeGesture == "Thumb_Up" ? thumbUpHeadValue :
+                activeGesture == "Thumb_Down" ? thumbDownHeadValue : 0;
+            float desiredTrunk = activeGesture == "Closed_Fist" ? closedFistTrunkValue : 0;
+            headGestureValue = Mathf.Lerp(headGestureValue, desiredHead, gestureBlend);
+            trunkGestureValue = Mathf.Lerp(trunkGestureValue, desiredTrunk, gestureBlend);
+            if (!enableLocomotion)
+            {
+                drinkRequested = false;
+                drinkWeight = 0;
+                StopAnimation();
+                return false;
+            }
+            // The inspector can change this reference while the graph is live.
+            // Rebuild before indexing its optional drink input.
+            if (graph.IsValid() && graphDrink != drink) StopAnimation();
+            if (!StartAnimation())
+            {
+                drinkRequested = false;
+                drinkWeight = 0;
+                GestureStatus = "Locomotion setup is incomplete; drink action is unavailable.";
+                return false;
+            }
+            if (!drink && drinkRequested)
+            {
+                drinkRequested = false;
+                drinkWeight = 0;
+                GestureStatus = "Drink clip is not assigned; continuing locomotion.";
+            }
+            else if (drinkRequested && drinkTime >= drink.length) drinkRequested = false;
+            drinkWeight = Mathf.Lerp(drinkWeight, drinkRequested ? 1 : 0, gestureBlend);
+            if (drink)
+            {
+                int drinkIndex = clips.Length;
+                playables[drinkIndex].SetTime(Mathf.Min(drinkTime, Mathf.Max(0, drink.length - .0001f)));
+                mixer.SetInputWeight(drinkIndex, DrinkWeight);
+                if (drinkRequested) drinkTime += dt;
+            }
             float desiredForward = testForward, desiredTurn = testSteering;
             bool valid = true;
             if (controller.inputMode == InputMode.Camera)
@@ -160,7 +263,7 @@ namespace DigiPhant
                 bool turning = steering.TryRead(controller, now, out desiredTurn);
                 valid = moving && turning;
             }
-            if (!valid) { throttle = turn = 0; }
+            if (!valid || IsDrinkActive) { throttle = turn = 0; }
             else
             {
                 float blend = inputSmoothing <= 0 ? 1 : 1 - Mathf.Exp(-inputSmoothing * dt);
@@ -174,7 +277,7 @@ namespace DigiPhant
                 ? throttle / runThreshold * walkSpeed : Mathf.Lerp(walkSpeed, runSpeed, Mathf.InverseLerp(runThreshold, 1, throttle));
             int action = throttle < 0 ? 3 : throttle > 0 ? (running ? 2 : 1) : turn < 0 ? 4 : turn > 0 ? 5 : 0;
             if (throttle > 0 && Mathf.Abs(turn) > .15f) action = running ? (turn < 0 ? 8 : 9) : (turn < 0 ? 6 : 7);
-            CurrentAction = actions[action];
+            CurrentAction = IsDrinkActive ? "Drink water" : actions[action];
             float animationRate = action == 0 ? 1 : throttle != 0
                 ? Mathf.Max(.15f, Mathf.Abs(CurrentSpeed) / (throttle < 0 ? backwardSpeed : running ? runSpeed : walkSpeed))
                 : Mathf.Max(.15f, Mathf.Abs(turn) * turnDegreesPerSecond / 18.75f);
@@ -183,9 +286,12 @@ namespace DigiPhant
             float weightBlend = 1 - Mathf.Exp(-dt / Mathf.Max(.01f, animationBlendSeconds));
             for (int i = 0; i < clips.Length; i++)
             {
-                mixer.SetInputWeight(i, Mathf.Lerp(mixer.GetInputWeight(i), i == action ? 1 : 0, weightBlend));
+                gaitWeights[i] = Mathf.Lerp(gaitWeights[i], i == action ? 1 : 0, weightBlend);
+                mixer.SetInputWeight(i, gaitWeights[i] * (1 - DrinkWeight));
                 playables[i].SetTime(cycle * clips[i].length);
             }
+            AnimationWeightSum = 1 - DrinkWeight;
+            if (drink) AnimationWeightSum += mixer.GetInputWeight(clips.Length);
             graph.Evaluate(0);
             // The travel parent alone owns world movement. Remove exported motion-node drift.
             animationMotionRoot.localPosition = motionPosition;
@@ -219,6 +325,7 @@ namespace DigiPhant
         {
             if (!graph.IsValid()) return;
             graph.Destroy();
+            graphDrink = null;
             if (elephantAnimator)
             {
                 elephantAnimator.runtimeAnimatorController = previousController;
@@ -232,6 +339,7 @@ namespace DigiPhant
         }
         void OnDisable()
         {
+            ClearGestureActions();
             StopAnimation();
             if (initialised)
             {
@@ -245,7 +353,7 @@ namespace DigiPhant
         {
             var label = new GUIStyle(GUI.skin.label) { wordWrap = true };
             bool selected = GUILayout.Toggle(enableLocomotion, "Enable locomotion");
-            if (selected != enableLocomotion) { enableLocomotion = selected; StopMotion(); }
+            if (selected != enableLocomotion) { enableLocomotion = selected; StopMotion(); ClearGestureActions(); }
             if (!enableLocomotion) return;
             GUILayout.Label(CurrentAction + " | " + Mathf.Abs(CurrentSpeed).ToString("0.0") + " units/s", label, GUILayout.Width(width));
             if (controller.inputMode == InputMode.TestSliders)

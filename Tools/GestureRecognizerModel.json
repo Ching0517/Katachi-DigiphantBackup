@@ -1,0 +1,5 @@
+{
+  "url": "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+  "sha256": "97952348CF6A6A4915C2EA1496B4B37EBABC50CBBF80571435643C455F2B0482",
+  "destination": "DigiPhantStarter/Tracking/gesture_recognizer.task"
+}
