@@ -54,6 +54,7 @@ namespace DigiPhant.Editor
             Add("Right ear", 3, Movement.ArmSpread, new[] { "r_Ear1" }, Vector3.up, -25);
             Add("Tail sway", 2, Movement.Lean, new[] { "Tail1" }, Vector3.up, 30);
             controller.controls = controls.ToArray();
+            controller.SetPerformerCount(controller.performerCount);
 
             var floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
             floor.name = "Stage";
@@ -151,7 +152,17 @@ namespace DigiPhant.Editor
             var baseline = new PoseFrame { version = 1, people = Enumerable.Range(1, 3).Select(i => new PerformerFrame {
                 slot = i, values = new float[6], confidence = Enumerable.Repeat(1f, 6).ToArray() }).ToArray() };
             Check(c.AcceptPacket(JsonUtility.ToJson(baseline), 10), "Baseline rejected");
-            Check(c.CalibrateAt(10), "Calibration failed");
+            c.InvalidateCalibration();
+            var lowConfidence = JsonUtility.FromJson<PoseFrame>(JsonUtility.ToJson(baseline));
+            lowConfidence.people[0].confidence[(int)Movement.LeftFootLift] = .2f;
+            Check(c.AcceptPacket(JsonUtility.ToJson(lowConfidence), 10), "Low-confidence packet rejected");
+            Check(!c.CalibrateAt(10), "Low-confidence movement was calibrated");
+            Check(c.Status.Contains("Front left leg") && c.Status.Contains("Performer 1") &&
+                c.Status.Contains("confidence is too low") && c.Status.Contains("20%") &&
+                c.Status.Contains("50%") && !c.IsCalibrated,
+                "Low-confidence calibration did not explain the failing movement and threshold");
+            Check(c.AcceptPacket(JsonUtility.ToJson(baseline), 10.1f), "Restored baseline rejected");
+            Check(c.CalibrateAt(10.1f), "Calibration failed");
             Check(c.AcceptPacket(packet, 10), "Valid packet rejected");
             Check(!c.AcceptPacket("{\"version\":1,\"people\":[{\"slot\":5}]}", 10), "Invalid packet accepted");
             c.ApplyControls(10, 1);
@@ -199,6 +210,14 @@ namespace DigiPhant.Editor
             Four();
             Check(c.performerCount == 4 && c.controls.Single(x => x.label == "Trunk curl").performer == 4, "Four-person preset failed");
             Three();
+            Check(c.controls.Single(x => x.label == "Head turn").performer == 1 &&
+                c.controls.Single(x => x.label == "Front left leg").performer == 1 &&
+                c.controls.Single(x => x.label == "Rear left leg").performer == 2 &&
+                c.controls.Single(x => x.label == "Tail sway").performer == 2 &&
+                c.controls.Single(x => x.label == "Trunk curl").performer == 3 &&
+                c.controls.Single(x => x.label == "Left ear").performer == 3 &&
+                c.controls.Single(x => x.label == "Right ear").performer == 3,
+                "Three-person role assignments failed");
             c.SetUpperBodyOnly(true);
             Check(!c.IsCalibrated, "Movement mode retained calibration");
             Check(!c.AcceptPacket(JsonUtility.ToJson(baseline), 40), "Full-body packet accepted in seated mode");

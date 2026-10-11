@@ -115,7 +115,9 @@ namespace DigiPhant
                     case "Front left leg": case "Front right leg": c.performer = 1; break;
                     case "Rear left leg": case "Rear right leg": case "Tail sway":
                         c.performer = Mathf.Min(2, performerCount); break;
-                    case "Head turn": case "Left ear": case "Right ear":
+                    case "Head turn":
+                        c.performer = performerCount >= 3 ? 1 : performerCount; break;
+                    case "Left ear": case "Right ear":
                         c.performer = Mathf.Min(3, performerCount); break;
                     case "Trunk curl": c.performer = performerCount; break;
                     default: c.performer = Mathf.Clamp(c.performer, 1, performerCount); break;
@@ -296,6 +298,41 @@ namespace DigiPhant
             return i >= 0 && i < performerCount && k >= 0 && k < 6 &&
                 IsTracked(performer, now) && confidence[i, k] >= minimumConfidence;
         }
+        public bool TryGetMovementReadinessIssue(int performer, Movement movement, float now, out string issue)
+        {
+            int i = performer - 1, k = (int)movement;
+            if (i < 0 || i >= performerCount || k < 0 || k >= 6)
+            {
+                issue = "Performer or movement assignment is invalid.";
+                return true;
+            }
+            if (now - lastSeen[i] > trackingTimeout)
+            {
+                issue = "Performer " + performer + " is not currently detected. Make sure they are fully in camera view.";
+                return true;
+            }
+            if (confidence[i, k] < minimumConfidence)
+            {
+                string movementName;
+                switch (movement)
+                {
+                    case Movement.LeftHandHeight: movementName = "left hand height"; break;
+                    case Movement.RightHandHeight: movementName = "right hand height"; break;
+                    case Movement.LeftFootLift: movementName = "left foot lift"; break;
+                    case Movement.RightFootLift: movementName = "right foot lift"; break;
+                    case Movement.Lean: movementName = "body lean"; break;
+                    case Movement.ArmSpread: movementName = "arm spread"; break;
+                    default: movementName = movement.ToString(); break;
+                }
+                issue = "Performer " + performer + " · " + movementName +
+                    " confidence is too low (" + confidence[i, k].ToString("P0") +
+                    "; needs " + minimumConfidence.ToString("P0") +
+                    "). Keep the relevant body parts visible and make the pose clearer.";
+                return true;
+            }
+            issue = null;
+            return false;
+        }
         public bool TryReadMovement(int performer, Movement movement, float now, out float value)
         {
             value = 0;
@@ -326,17 +363,17 @@ namespace DigiPhant
         public bool CalibrateAt(float now)
         {
             calibrationDeadline = -1;
-            // Require every mapped input, so occluded landmarks cannot silently become neutral.
+            IsCalibrated = false;
+            var locomotion = GetComponent<DigiPhantLocomotion>();
             foreach (var c in controls)
             {
-                int i = c.performer - 1, k = (int)c.movement;
-                if (i < 0 || i >= performerCount || k < 0 || k >= 6 ||
-                    !IsTracked(c.performer, now) || confidence[i, k] < minimumConfidence)
-                { Status = "Calibration needs all assigned movements visible"; return false; }
+                if (locomotion != null && locomotion.ShouldGestureOwn(c.label)) continue;
+                if (TryGetMovementReadinessIssue(c.performer, c.movement, now, out string issue))
+                { Status = "Neutral pose not saved. " + c.label + ": " + issue; return false; }
             }
-            var locomotion = GetComponent<DigiPhantLocomotion>();
-            if (locomotion != null && locomotion.isActiveAndEnabled && !locomotion.InputsVisible(now))
-            { Status = "Calibration needs speed and steering inputs visible"; return false; }
+            if (locomotion != null && locomotion.isActiveAndEnabled &&
+                !locomotion.InputsVisible(now, out string locomotionIssue))
+            { Status = "Neutral pose not saved. " + locomotionIssue; return false; }
             Array.Copy(values, neutral, values.Length);
             IsCalibrated = true;
             Status = "Neutral pose saved";

@@ -4729,7 +4729,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DigiPhant.DigiPhantController
   inputMode: 1
-  performerCount: 1
+  performerCount: 3
   upperBodyOnly: 1
   controls:
   - label: Front left leg
@@ -4755,7 +4755,7 @@ MonoBehaviour:
     testValue: 0
     locomotionWeight: 0.35
   - label: Rear left leg
-    performer: 1
+    performer: 2
     movement: 2
     bones:
     - {fileID: 504439225}
@@ -4766,7 +4766,7 @@ MonoBehaviour:
     testValue: 0
     locomotionWeight: 0.35
   - label: Rear right leg
-    performer: 1
+    performer: 2
     movement: 3
     bones:
     - {fileID: 504439224}
@@ -4788,7 +4788,7 @@ MonoBehaviour:
     testValue: 0
     locomotionWeight: 1
   - label: Trunk curl
-    performer: 1
+    performer: 3
     movement: 1
     bones:
     - {fileID: 504439222}
@@ -4805,7 +4805,7 @@ MonoBehaviour:
     testValue: 0
     locomotionWeight: 1
   - label: Left ear
-    performer: 1
+    performer: 3
     movement: 5
     bones:
     - {fileID: 504439215}
@@ -4816,7 +4816,7 @@ MonoBehaviour:
     testValue: 0
     locomotionWeight: 1
   - label: Right ear
-    performer: 1
+    performer: 3
     movement: 5
     bones:
     - {fileID: 504439214}
@@ -4827,7 +4827,7 @@ MonoBehaviour:
     testValue: 0
     locomotionWeight: 1
   - label: Tail sway
-    performer: 1
+    performer: 2
     movement: 4
     bones:
     - {fileID: 504439213}
@@ -4892,8 +4892,9 @@ MonoBehaviour:
   enableGestureActions: 1
   drink: {fileID: 1827226128182048838, guid: 90d33167f6645c64faabb84065cc32d5, type: 3}
   gestureBlendSeconds: 0.2
-  thumbUpHeadValue: -1
-  thumbDownHeadValue: 1
+  thumbUpLeftEarValue: 1
+  thumbDownRightEarValue: 1
+  earFlapFrequency: 2.5
   closedFistTrunkValue: 1
   forward:
     combination: 1
@@ -4906,7 +4907,7 @@ MonoBehaviour:
   steering:
     combination: 1
     sources:
-    - performer: 1
+    - performer: 2
       movement: 4
       weight: 1
     sensitivity: 1

@@ -52,11 +52,14 @@ namespace DigiPhant
         [Tooltip("The one-shot vendor clip played by a Victory gesture.")]
         public AnimationClip drink;
         [Range(.05f, 1)] public float gestureBlendSeconds = .2f;
-        [Range(-1, 1)] public float thumbUpHeadValue = -1;
-        [Range(-1, 1)] public float thumbDownHeadValue = 1;
+        [Range(-1, 1)] public float thumbUpLeftEarValue = 1;
+        [Range(-1, 1)] public float thumbDownRightEarValue = 1;
+        [Range(.5f, 6)] public float earFlapFrequency = 2.5f;
         [Range(-1, 1)] public float closedFistTrunkValue = 1;
         public MovementDriver forward = new MovementDriver { sources = new[] { new MovementSource { movement = Movement.LeftHandHeight } } };
-        public MovementDriver steering = new MovementDriver { sources = new[] { new MovementSource { movement = Movement.Lean } } };
+        // In the three-performer upper-body arrangement P1 drives travel speed
+        // and P2's shoulder tilt steers the shared travel root.
+        public MovementDriver steering = new MovementDriver { sources = new[] { new MovementSource { performer = 2, movement = Movement.Lean } } };
         [Min(.01f)] public float walkSpeed = 1.8f;
         [Min(.01f)] public float runSpeed = 4.5f;
         [Min(.01f)] public float backwardSpeed = 1.2f;
@@ -95,7 +98,7 @@ namespace DigiPhant
         RuntimeAnimatorController previousController;
         float throttle, turn, cycle;
         string activeGesture = "None";
-        float headGestureValue, trunkGestureValue, drinkWeight, drinkTime;
+        float leftEarGestureValue, rightEarGestureValue, trunkGestureValue, drinkWeight, drinkTime, earFlapPhase;
         bool drinkRequested, victoryLatched;
 
         void OnEnable() { controller = GetComponent<DigiPhantController>(); }
@@ -121,19 +124,23 @@ namespace DigiPhant
         public void ClearGestureActions()
         {
             activeGesture = "None";
-            headGestureValue = trunkGestureValue = 0;
+            leftEarGestureValue = rightEarGestureValue = trunkGestureValue = 0;
             drinkWeight = drinkTime = 0;
+            earFlapPhase = 0;
             drinkRequested = victoryLatched = false;
             GestureStatus = null;
         }
         public bool ShouldGestureOwn(string controlLabel)
         {
-            return GestureActionsActive && (controlLabel == "Head turn" || controlLabel == "Trunk curl");
+            return GestureActionsActive && (controlLabel == "Left ear" || controlLabel == "Right ear" ||
+                controlLabel == "Trunk curl");
         }
         public float GestureValueFor(string controlLabel)
         {
             if (!GestureActionsActive) return 0;
-            return controlLabel == "Head turn" ? headGestureValue : controlLabel == "Trunk curl" ? trunkGestureValue : 0;
+            return controlLabel == "Left ear" ? leftEarGestureValue :
+                controlLabel == "Right ear" ? rightEarGestureValue :
+                controlLabel == "Trunk curl" ? trunkGestureValue : 0;
         }
         public bool Initialise()
         {
@@ -192,14 +199,27 @@ namespace DigiPhant
             graph.Play();
             return true;
         }
-        public bool InputsVisible(float now)
+        public bool InputsVisible(float now, out string issue)
         {
+            issue = null;
             if (!enableLocomotion) return true;
             if (controller == null) controller = GetComponent<DigiPhantController>();
-            foreach (var driver in new[] { forward, steering })
-                foreach (var source in driver.sources)
-                    if (source != null && Mathf.Abs(source.weight) > .0001f &&
-                        !controller.IsMovementVisible(source.performer, source.movement, now)) return false;
+            if (!DriverInputsVisible(forward, "Forward", now, out issue)) return false;
+            if (!DriverInputsVisible(steering, "Steering", now, out issue)) return false;
+            return true;
+        }
+        bool DriverInputsVisible(MovementDriver driver, string label, float now, out string issue)
+        {
+            foreach (var source in driver.sources)
+            {
+                if (source == null || Mathf.Abs(source.weight) <= .0001f) continue;
+                if (controller.TryGetMovementReadinessIssue(source.performer, source.movement, now, out string sourceIssue))
+                {
+                    issue = label + " input: " + sourceIssue;
+                    return false;
+                }
+            }
+            issue = null;
             return true;
         }
         public void ClampPerformers(int count)
@@ -218,10 +238,13 @@ namespace DigiPhant
         {
             dt = Mathf.Clamp(dt, 0, .1f);
             float gestureBlend = 1 - Mathf.Exp(-dt / Mathf.Max(.01f, gestureBlendSeconds));
-            float desiredHead = activeGesture == "Thumb_Up" ? thumbUpHeadValue :
-                activeGesture == "Thumb_Down" ? thumbDownHeadValue : 0;
+            earFlapPhase = Mathf.Repeat(earFlapPhase + dt * earFlapFrequency, 1);
+            float earFlap = Mathf.Sin(earFlapPhase * Mathf.PI * 2);
+            float desiredLeftEar = activeGesture == "Thumb_Up" ? thumbUpLeftEarValue * earFlap : 0;
+            float desiredRightEar = activeGesture == "Thumb_Down" ? thumbDownRightEarValue * earFlap : 0;
             float desiredTrunk = activeGesture == "Closed_Fist" ? closedFistTrunkValue : 0;
-            headGestureValue = Mathf.Lerp(headGestureValue, desiredHead, gestureBlend);
+            leftEarGestureValue = Mathf.Lerp(leftEarGestureValue, desiredLeftEar, gestureBlend);
+            rightEarGestureValue = Mathf.Lerp(rightEarGestureValue, desiredRightEar, gestureBlend);
             trunkGestureValue = Mathf.Lerp(trunkGestureValue, desiredTrunk, gestureBlend);
             if (!enableLocomotion)
             {
@@ -290,8 +313,8 @@ namespace DigiPhant
                 mixer.SetInputWeight(i, gaitWeights[i] * (1 - DrinkWeight));
                 playables[i].SetTime(cycle * clips[i].length);
             }
-            AnimationWeightSum = 1 - DrinkWeight;
-            if (drink) AnimationWeightSum += mixer.GetInputWeight(clips.Length);
+            AnimationWeightSum = 0;
+            for (int i = 0; i < mixer.GetInputCount(); i++) AnimationWeightSum += mixer.GetInputWeight(i);
             graph.Evaluate(0);
             // The travel parent alone owns world movement. Remove exported motion-node drift.
             animationMotionRoot.localPosition = motionPosition;
